@@ -1,9 +1,10 @@
 ﻿using Newtonsoft.Json;
+using System.IO;
 using System.IO.Compression;
+using static System.Net.Mime.MediaTypeNames;
 
 class Program
 {
-
 	public static Dictionary<string, string> createJson(string i)
 	{
 		var o = new Dictionary<string, string>();
@@ -32,11 +33,12 @@ class Program
 			if (!oLines.ContainsKey(kvp.Key))
 			{
 				ot[kvp.Key] = kvp.Value;
+				System.Diagnostics.Debug.WriteLine(kvp.Key);
 			}
 		}
 
 		if (!ot.SequenceEqual(oLines))
-{
+		{
 			string file = $"document.styleOptions = {JsonConvert.SerializeObject(oLines, Formatting.Indented)}";
 			return file;
 		}
@@ -46,15 +48,54 @@ class Program
 		}
 	}
 
-	public static void runSync(List<string> zContent, List<string> currentFiles, ZipArchive z)
+	public static void syncNew(List<string> files, ZipArchive z)
 	{
+		foreach (var item in files)
+		{
+			var io = item.Split("./")[1];
+			if (io.Split("/").Length > 1)
+			{
+				var checkNew = io.Split("/");
+				checkNew = checkNew.Take(checkNew.Count() - 1).ToArray();
+				string newOut = string.Join("/", checkNew);
+				if (!Directory.Exists(string.Join("/", checkNew)))
+				    Directory.CreateDirectory(newOut);
+			}
+
+			string o = "VStream-Widgets-Collection-main/"+item.Split("./")[1];
+
+			foreach (ZipArchiveEntry entry in z.Entries)
+			{
+				Console.WriteLine(entry.FullName);
+				if (entry.FullName == o)
+				{
+					entry.ExtractToFile(item);
+				}
+		    }
+		}
+	}
+
+	public static void runSync(List<string> zContent, List<string> currentFiles, ZipArchive z, List<string> newFiles)
+	{
+
 		foreach (var item in zContent)
 		{
+			
 			string relativePath = item.Replace("VStream-Widgets-Collection-main/", "");
-			string oFile;
-			if (currentFiles.IndexOf(relativePath) != -1)
+
+			// Create new directories if they do not exist already
+			if (relativePath.Split("/").Length > 1)
 			{
-				string newContent = new StreamReader(z.GetEntry(item).Open()).ReadToEnd();
+				var checkNew = relativePath.Split("/");
+				checkNew = checkNew.Take(checkNew.Count() - 1).ToArray();
+				string newOut = string.Join("/", checkNew);
+				if (!Directory.Exists(string.Join("/", checkNew)))
+					Directory.CreateDirectory(newOut);
+			}
+
+			string newContent = new StreamReader(z.GetEntry(item).Open()).ReadToEnd();
+			try
+			{
 				string oldContent = File.ReadAllText(relativePath);
 
 				if (oldContent.StartsWith(" "))
@@ -62,33 +103,25 @@ class Program
 					oldContent = oldContent.Substring(1);
 				}
 
-				if (newContent != oldContent)
+				if (relativePath.Split("/")[1] == "options.js")
 				{
-					if (item.EndsWith("options.js"))
+					string changedContent = makeOptionChange(newContent, oldContent);
+					if (changedContent != "false")
 					{
-						string changedContent = makeOptionChange(newContent, oldContent);
-						if (changedContent != "false")
-						{
-							File.WriteAllText(relativePath, changedContent);
-							continue;
-						}
+						File.WriteAllText(relativePath, changedContent);
 					}
-				}
-				else
-				{
 					continue;
 				}
-			} else
-			{
-				oFile = new StreamReader(z.GetEntry(item).Open()).ReadToEnd();
-				File.WriteAllText(relativePath, oFile);
-			}
+			} catch { };
+			File.WriteAllText(relativePath, newContent);
+			newFiles.Remove("./"+relativePath);
 		}
+
+		syncNew(newFiles, z);
 	}
 
 	public static async Task Main()
 	{
-		var conAndZ = new List<List<string>>();
 		var url = "https://github.com/h3llo-wor1d/VStream-Widgets-Collection/archive/refs/heads/main.zip";
 
 		using (HttpClient client = new HttpClient())
@@ -110,8 +143,19 @@ class Program
 											!entry.Name.EndsWith(".mp3") &&
 											!entry.Name.EndsWith(".ttf") &&
 											!entry.Name.EndsWith(".otf") &&
-											!entry.Name.EndsWith(".py"))
+											!entry.Name.EndsWith(".py") &&
+											!entry.Name.EndsWith(".exe"))
 							.Select(entry => entry.FullName.Replace("\\", "/"))
+							.ToList();
+
+						var allFiles = Directory.GetFiles(".", "*.*", SearchOption.AllDirectories)
+						.Where(file => !file.EndsWith(".dll"))
+						.Select(file => file.Replace("\\", "/")).ToList();
+
+						var newContents = archive.Entries
+							.Where(entry => entry.Name.Contains("."))
+							.Select(entry => "./"+entry.FullName.Replace("\\", "/").Replace("VStream-Widgets-Collection-main/", ""))
+							.Where(entry => allFiles.IndexOf(entry) == -1 && !entry.EndsWith("options.js"))
 							.ToList();
 
 						var currentFiles = Directory.GetFiles(".", "*.*", SearchOption.AllDirectories)
@@ -121,11 +165,12 @@ class Program
 										   !file.EndsWith(".mp3") &&
 										   !file.EndsWith(".ttf") &&
 										   !file.EndsWith(".otf") &&
-										   !file.EndsWith(".py"))
+										   !file.EndsWith(".py") &&
+										   !file.EndsWith(".exe"))
 							.Select(file => file.Replace("\\", "/"))
 							.ToList();
 
-						runSync(zContents, currentFiles, z);		
+						runSync(zContents, currentFiles, z, newContents);		
 					}
 				}
 			}
